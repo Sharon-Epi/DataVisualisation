@@ -1,0 +1,873 @@
+---
+title: "Untitled"
+author: "Sharon"
+date: "2024-05-04"
+output: html_document
+---
+
+```{r}
+install.packages("plotly")
+install.packages("shiny")
+install.packages("viridis")
+install.packages("htmlwidgets")
+install.packages("treemap")
+library(treemap)
+library(finalfit)
+library(pacman)
+library(haven)
+library(sas7bdat) 
+require(ggplot2)
+library(dplyr)
+library(skimr)
+library(tidyverse) 
+library(lattice)
+library(tidyr)
+library(zoo)
+library(patchwork)
+library(reshape2)
+library(magrittr)
+library(plotly)
+library(shiny)
+library(viridis)
+```
+
+
+```{r}
+#Load data 
+
+rm(list=ls())
+
+customers <- read.csv("C:/Users/shaaz/OneDrive/Documents/R/Data Visualisation code/customers.csv")
+data_orders <- read.csv("C:/Users/shaaz/OneDrive/Documents/R/Data Visualisation code/orders.csv")
+products <- read.csv("C:/Users/shaaz/OneDrive/Documents/R/Data Visualisation code/products.csv")
+regions <- read.csv("C:/Users/shaaz/OneDrive/Documents/R/Data Visualisation code/regions.csv")
+
+View(customers)
+View(data_orders)
+View(products)
+View(regions) 
+```
+
+
+```{r}
+#Data prep
+
+#long format for orders data
+data_orders_long <- data_orders %>%
+  rowwise() %>%
+  mutate(
+    Products = strsplit(Products, ";"),
+    productsIDs = strsplit(productsIDs, ","),
+    Quantities = strsplit(Quantities, ","),
+    ProductPricesInCP = strsplit(ProductPricesInCP, ",")
+  ) %>%
+  unnest(cols = c(Products, productsIDs, Quantities, ProductPricesInCP)) %>%
+  mutate(
+    productsIDs = as.integer(productsIDs),
+    Quantities = as.integer(Quantities),
+    ProductPricesInCP = as.numeric(ProductPricesInCP)
+  )
+
+View(data_orders_long)
+str(data_orders_long)
+
+
+#create column for order year
+data_orders_long$OrderDate <- as.Date(data_orders_long$OrderDate)
+data_orders_long$OrderYear <- year(data_orders_long$OrderDate)
+print(data_orders_long)
+
+data_orders_long$OrderDate <- as.Date(data_orders_long$OrderDate)
+data_orders_long$Month <- format(data_orders_long$OrderDate, "%B")
+data_orders_long$Month <- factor(data_orders_long$Month, levels = month.name)
+View(data_orders_long)
+
+# Summarize data
+summary_data <- data %>%
+  group_by(Year, Product, Region, Month) %>%
+  summarise(Orders = n()) %>%
+  ungroup()
+
+
+#Merging data sets 
+#Orders and customers
+merged_data1 <- merge(data_orders_long, customers, by.x = "CustomerID", by.y = "Account.Code", all = TRUE)
+view(merged_data1)
+
+#Orders and products
+merged_dataOP <- merge(data_orders_long, products, by.x = "productsIDs", by.y = "product_code", all = TRUE)
+view(merged_dataOP)
+
+#drop some columns
+columns_to_drop <- c("CartPrice", "Business.Unit", "Products.Business.Line.Leader", "Product.Name", "Brand.Name", "Brand.Manager")
+merged_data_reduced <- merged_dataOP %>%
+  select(-any_of(columns_to_drop))
+View(merged_data_reduced)
+
+#orders, products and region
+merged_data3 <- merge(merged_data_reduced, regions, by.x = "Territory", by.y = "Territory", all = TRUE)
+view(merged_data3)
+
+#drop some columns again
+columns_to_drop1 <- c("Nation", "Region", "Area.Manager", "Regional.Manager")
+merged_data3_reduced <- merged_data3 %>%
+  select(-any_of(columns_to_drop1))
+View(merged_data3_reduced)
+str(merged_data3_reduced)
+summary(merged_data3_reduced)
+
+# Save the modified data as a new CSV file
+write.csv(merged_data3_reduced, file = "deadmerged_data.csv", row.names = FALSE)
+deadmerged_data <- read.csv("C:/Users/shaaz/OneDrive/Documents/R/Data Visualisation code/deadmerged_data.csv")
+View(deadmerged_data)
+
+
+merged_data3_reduced %>% 
+  count(Subtype)
+merged_data3_reduced %>% 
+  count(Type)
+
+# Aggregate the data to get total orders per product, region, and order year and sales data
+merged_data3_summary <- merged_data3_reduced %>%
+  group_by(OrderYear, Area, Type, Month, Subtype) %>%
+  summarise(
+    TotalOrders = n(),
+    TotalQuantities = sum(Quantities),
+    TotalSales = sum(ProductPricesInCP)
+  ) %>%
+  ungroup()
+print(merged_data3_summary)
+view(merged_data3_summary)
+str(merged_data3_summary)
+summary(merged_data3_summary$TotalOrders)
+
+merged_data3_summary1 <- merged_data3_reduced  %>%
+  group_by(OrderYear, Area, Type) %>%
+  summarise(
+    TotalOrders = n(),
+    TotalQuantities = sum(Quantities),
+    TotalSales = sum(ProductPricesInCP)
+  ) %>%
+  ungroup()
+
+View(merged_data3_summary1)
+#Facet plot
+ggplot(merged_data3_summary, aes(x = TotalOrders, y = Type, fill = as.factor(OrderYear))) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~ Area) +
+  labs(x = "Total Orders", y = "Product Types", title = "Number of Orders by Product type and Region") +
+  scale_fill_discrete(name = "Year") +
+  theme_minimal() + 
+  scale_x_continuous(labels = scales::comma_format())
+
+#Semi interactive plot
+# Create ggplot object
+p <- ggplot(merged_data3_summary, aes(x = TotalOrders, y = Type, fill = as.factor(OrderYear))) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~ Area) +
+  labs(x = "Total Orders", y = "Product Types", title = "Number of Orders by Product type and Region") +
+  scale_fill_discrete(name = "Year") +
+  theme_minimal() +
+  scale_x_continuous(labels = scales::comma_format())  # Format x-axis labels
+
+# Convert ggplot to plotly object
+p <- ggplotly(p)
+# Print the interactive plot
+p
+
+#Semi interactive plot: Quantities as weights-USEEEEEEEE
+q <- ggplot(merged_data3_summary1, aes(x = TotalOrders, y = Type, fill = as.factor(OrderYear), weight =   TotalQuantities)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~ Area) +
+  labs(x = "Total Orders", y = "Product Types", title = "Number of Orders by Product type and Region") +
+  scale_fill_discrete(name = "Year") +
+  theme_minimal() +
+  scale_x_continuous(labels = scales::comma_format())  # Format x-axis labels
+q <- ggplotly(q)
+q
+
+# Create a treemap function
+create_treemap <- function(year, subtype) {
+  subset_data <- merged_data3_summary[merged_data3_summary$OrderYear == year & merged_data3_summary$Subtype == subtype, ]
+  treemap_data <- subset_data[order(subset_data$TotalQuantities, decreasing = TRUE), ]
+  treemap <- plot_ly(treemap_data, labels = ~Subtype, values = ~TotalQuantities, type = "treemap",
+                     text = ~paste("Subtype: ", Subtype, "<br>Quantity: ", TotalQuantities))
+  return(treemap)
+}
+
+# Define UI
+ui <- fluidPage(
+  plotlyOutput("plot"),
+  plotlyOutput("treemap")
+)
+
+server <- function(input, output, session) {
+  output$plot <- renderPlotly({
+    p
+  })
+  
+  observeEvent(event_data("plotly_click"), {
+    print("Clicked!")  # Debugging message
+    point <- event_data("plotly_click")
+    print(point)  # Debugging message
+    if (!is.null(point)) {
+      year <- as.integer(point$x)  # Convert to integer
+      subtype <- as.character(point$y)  # Convert to character
+      print(year)  # Debugging message
+      print(subtype)  # Debugging message
+      output$treemap <- renderPlotly({
+        print("Creating treemap...")  # Debugging message
+        create_treemap(year, subtype)
+      })
+    }
+  })
+}
+
+# Run the application
+shinyApp(ui = ui, server = server)
+
+
+
+#Quantities as weights
+q <- ggplot(merged_data3_summary1, aes(x = TotalOrders, y = Type, fill = as.factor(OrderYear), weight =   TotalQuantities)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~ Area) +
+  labs(x = "Total Orders", y = "Product Types", title = "Number of Orders by Product type and Region") +
+  scale_fill_discrete(name = "Year") +
+  theme_minimal() +
+  scale_x_continuous(labels = scales::comma_format())  # Format x-axis labels
+q <- ggplotly(q)
+q
+```
+
+
+
+```{r}
+#Trying a facet plot using shiny
+# Define UI
+ui <- fluidPage(
+  titlePanel("Interactive Plot Example"),
+  sidebarLayout(
+    sidebarPanel(
+      # Add any input controls here if needed
+    ),
+    mainPanel(
+      plotOutput("plot")
+    )
+  )
+)
+
+# Define server logic
+server <- function(input, output) {
+  output$plot <- renderPlot({
+    # Create your ggplot object here
+    p
+  })
+}
+
+# Run the application
+shinyApp(ui = ui, server = server)
+
+```
+
+
+```{r}
+#Tomorrow make interactive
+#Facet plot for seasonality: by year 
+
+
+# Convert Month to factor with month names
+merged_data3_summary$Month <- factor(merged_data3_summary$Month, levels = month.name)
+view(merged_data3_summary)
+
+# Create the stacked area plot: didnt work
+
+
+# Assuming you want to plot data for the year 2019
+year_to_plot <- 2019
+# Filter data for the specified year
+year2019 <- merged_data3_summary %>%
+  filter(OrderYear == year_to_plot)
+view(year2019)
+# Plot for the specified year
+ggplot(year2019, aes(x = Month, y = TotalOrders, fill = Type)) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~ Area, ncol = 2, scales = "free_x") +
+  labs(x = "Month", y = "Number of Orders", title = "Seasonality of Orders by Product and Region for 2019") +
+  scale_x_discrete(labels = month.abb) +
+  scale_fill_discrete(name = "Product Type") +
+  theme_minimal()
+
+```
+
+
+```{r}
+#Tree map: quantities of products by year
+
+aggregated_datatree <- merged_data3_summary %>%
+  group_by(Subtype, Type, OrderYear) %>%
+  summarise(TotalQuantities = sum(TotalQuantities),
+            TotalOrders = sum(TotalOrders),
+            TotalSales = sum(TotalSales)) %>%
+  ungroup()
+
+# Filter aggregated data for the year 2019
+aggregated_datatree_2019 <- aggregated_datatree[aggregated_datatree$OrderYear == 2019, ]
+View(aggregated_datatree_2019)
+
+# Create the treemap
+treemap(
+  aggregated_datatree_2019,
+  index = "Type",                # Index by product type
+  vSize = "TotalQuantities",     # Use TotalQuantities for the size of the blocks
+  title = "Total number of Products sold in 2019 by product type",
+  fontsize.labels = c(12, 10),
+  fontsize.title = 14
+)
+
+
+#Interactive plot: Hover and get the TotalQuantities-Not working proper
+# Create the interactive treemap
+p <- plot_ly(
+  data = aggregated_datatree_2019,
+  ids = ~Type,
+  labels = ~Type,
+  parents = ~"Product",
+  values = ~TotalQuantities,
+  type = "treemap",
+  hoverinfo = "label+value"
+) %>% layout(
+  title = "Interactive Treemap of Product Types for 2019",
+  font = list(size = 14)
+)
+# Display the interactive treemap
+p
+
+#Interactive plot to show the subtypes when u hover-Does not work
+p4 <- plot_ly(
+  data = aggregated_datatree_2019,
+  ids = ~Type,
+  labels = ~Type,
+  parents = ~"Product",
+  values = ~TotalQuantities,
+  type = "treemap",
+  hoverinfo = "label+value+text",
+  text = ~paste("Subtype: ", Subtype, "<br>Total Quantity: ", TotalQuantities)
+) %>% layout(
+  title = "Interactive Treemap of Product Types for 2019",
+  font = list(size = 14)
+)
+
+# Display the interactive treemap
+p4
+
+p <- plot_ly(
+  data = aggregated_datatree_2019,
+  ids = ~Type,
+  labels = ~Type,
+  parents = ~"Product",
+  values = ~TotalQuantities,
+  type = "treemap",
+  hoverinfo = "label+value+text",
+  text = ~paste("Type: ", Type, "<br>", 
+                "Subtypes: ", paste(Subtype, collapse = ", "), "<br>",
+                "Total Quantity: ", TotalQuantities)
+) %>% layout(
+  title = "Interactive Treemap of Product Types for 2019",
+  font = list(size = 14)
+)
+p
+
+
+# Aggregate the data for all years
+aggd_data <- merged_data3_summary %>%
+  group_by(OrderYear, Type) %>%
+  summarise(TotalQuantities = sum(TotalQuantities)) %>%
+  ungroup()
+
+treemap(
+  aggd_data,
+  index = c("OrderYear", "Type"),  # Index by year and type
+  vSize = "TotalQuantities",       # Use TotalQuantities for the size of the blocks
+  title = "Treemap of Product Types by Year and Quantities"
+)
+
+
+# Aggregate TotalQuantities by Type for each year
+agg_data <- merged_data3_summary %>%
+  group_by(OrderYear, Type) %>%
+  summarise(TotalQuantities = sum(TotalQuantities)) %>%
+  ungroup() %>%
+  arrange(OrderYear, desc(TotalQuantities))  # Sort Types based on TotalQuantities for each year
+
+# Create histogram
+ggplot(agg_data, aes(x = reorder(Type, TotalQuantities), y = TotalQuantities, fill = factor(OrderYear))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "Type", y = "Total Quantities", 
+       title = "Total Quantities by Type for Each Year") +
+  scale_fill_discrete(name = "Year") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  # Rotate x-axis labels for better readability
+  scale_y_continuous(labels = comma_format())
+
+
+# Aggregate TotalOrders by Type for each year
+agg_data2 <- merged_data3_summary %>%
+  group_by(OrderYear, Type) %>%
+  summarise(TotalOrders = sum(TotalOrders)) %>%
+  ungroup() %>%
+  arrange(OrderYear, desc(TotalOrders))  # Sort Types based on TotalOrders for each year
+
+# Create histogram
+ggplot(agg_data2, aes(x = reorder(Type, TotalOrders), y = TotalOrders, fill = factor(OrderYear))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "Type", y = "Total Orders", 
+       title = "Total Orders by Type for Each Year") +
+  scale_fill_discrete(name = "Year") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  # Rotate x-axis labels for better readability
+  scale_y_continuous(labels = comma_format())  # Format y-axis labels with comma separator
+
+# Aggregate TotalSales by Type for each year
+agg_data_sales <- merged_data3_summary %>%
+  group_by(OrderYear, Type) %>%
+  summarise(TotalSales = sum(TotalSales)) %>%
+  ungroup() %>%
+  arrange(OrderYear, desc(TotalSales))  # Sort Types based on TotalSales for each year
+
+# Create histogram
+ggplot(agg_data_sales, aes(x = reorder(Type, TotalSales), y = TotalSales, fill = factor(OrderYear))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "Type", y = "Total Sales", 
+       title = "Total Sales by Type for Each Year") +
+  scale_fill_discrete(name = "Year") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  # Rotate x-axis labels for better readability
+  scale_y_continuous(labels = scales::dollar_format(prefix = "$"))
+
+
+# Aggregate TotalSales by Type and Area for each year
+agg_data_sales_area <- merged_data3_summary %>%
+  group_by(OrderYear, Area, Type) %>%
+  summarise(TotalSales = sum(TotalSales)) %>%
+  ungroup() %>%
+  arrange(OrderYear, desc(TotalSales))  # Sort Types based on TotalSales for each year
+
+# Create histogram with facets for each Area
+ggplot(agg_data_sales_area, aes(x = reorder(Type, TotalSales), y = TotalSales, fill = factor(OrderYear))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "Type", y = "Total Sales", 
+       title = "Total Sales by Type for Each Year and Area") +
+  scale_fill_discrete(name = "Year") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  # Rotate x-axis labels for better readability
+  scale_y_continuous(labels = scales::dollar_format(prefix = "$")) +  # Format y-axis labels as dollar amounts
+  facet_wrap(~ Area, scales = "free_y", nrow = 1)  # Facet by Area with free y-axis scales
+
+# Filter the data for the year 2019
+sales_data_2019 <- merged_data3_summary %>% 
+  filter(OrderYear == 2019)
+
+# Aggregate the filtered data
+aggregated_data_2019 <- sales_data_2019 %>%
+  group_by(OrderYear, Area, Type) %>%
+  summarise(TotalSales = sum(TotalSales),
+            TotalOrders = sum(TotalOrders),
+            TotalQuantities = sum(TotalQuantities)) %>%
+  ungroup()
+
+# Create the plot faceted by Area
+ggplot(aggregated_data_2019, aes(x = reorder(Type, TotalSales), y = TotalSales, fill = factor(OrderYear))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "Type", y = "Total Sales", 
+       title = "Total Sales by Type in 2019, Faceted by Area") +
+  scale_fill_discrete(name = "Year") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  
+  scale_y_continuous(labels = scales::dollar_format(prefix = "$")) +  
+  facet_wrap(~ Area, scales = "free_y", nrow = 1)
+```
+
+
+```{r}
+#Question 5555
+
+# Aggregate the data to get total orders per product, region, and order year and sales data
+merged_data3_summary <- merged_data3_reduced %>%
+  group_by(OrderYear, Area, Type, Month, Subtype) %>%
+  summarise(
+    TotalOrders = n(),
+    TotalQuantities = sum(Quantities),
+    TotalSales = sum(ProductPricesInCP)
+  ) %>%
+  ungroup()
+print(merged_data3_summary)
+view(merged_data3_summary)
+str(merged_data3_summary)
+summary(merged_data3_summary$TotalOrders)
+
+merged_data3_summary1 <- merged_data3_reduced  %>%
+  group_by(OrderYear, Area, Type) %>%
+  summarise(
+    TotalOrders = n(),
+    TotalQuantities = sum(Quantities),
+    TotalSales = sum(ProductPricesInCP)
+  ) %>%
+  ungroup()
+View(merged_data3_summary1)
+
+#Total orders in all 5 regions for the 5 years
+merged_data3_summary2 <- merged_data3_reduced  %>%
+  group_by(OrderYear, Area) %>%
+  summarise(
+    TotalOrders = n(),
+    TotalQuantities = sum(Quantities),
+    TotalSales = sum(ProductPricesInCP)
+  ) %>%
+  ungroup()
+View(merged_data3_summary2)
+
+#Bar plot
+ggplot(merged_data3_summary2, aes(x = Area, y = TotalOrders, fill = as.factor(OrderYear))) +
+  geom_bar(stat = "identity") +
+  labs(x = "Region", y = "Total Orders", title = "Total Orders by Region and Year") +
+  scale_fill_discrete(name = "Year") +
+  theme_minimal() +
+  scale_y_continuous(labels = scales::number_format())
+
+#Facet plot
+ggplot(merged_data3_summary1, aes(x = TotalOrders, y = Type, fill = as.factor(OrderYear))) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~ Area) +
+  labs(x = "Total Orders", y = "Product Types", title = "Number of Orders by Product type and Region") +
+  scale_fill_discrete(name = "Year") +
+  theme_minimal() + 
+  scale_x_continuous(labels = scales::comma_format())
+
+#Seasonality of orders
+#Total orders in all 5 regions for the 5 years
+merged_data3_summary3 <- merged_data3_reduced  %>%
+  group_by(OrderYear, Area, Month) %>%
+  summarise(
+    TotalOrders = n(),
+    TotalQuantities = sum(Quantities),
+    TotalSales = sum(ProductPricesInCP)
+  ) %>%
+  ungroup()
+View(merged_data3_summary3)
+
+
+# Plot the faceted plot: Seasonality for all products
+ggplot(merged_data3_summary3, aes(x = Month, y = TotalOrders, color = as.factor(OrderYear), group = interaction(Area, OrderYear))) +
+  geom_line() +
+  facet_wrap(~ Area) +
+  labs(x = "Month", y = "Total Orders", color = "Year", title = "Total Orders by Month and Year for Each Area") +
+  theme_minimal() +
+  scale_x_discrete(labels = month.abb)
+
+#Seasonality by product type
+merged_data3_summary4 <- merged_data3_reduced  %>%
+  group_by(OrderYear, Area, Month, Type) %>%
+  summarise(
+    TotalOrders = n(),
+    TotalQuantities = sum(Quantities),
+    TotalSales = sum(ProductPricesInCP)
+  ) %>%
+  ungroup()
+View(merged_data3_summary4)
+
+ggplot(merged_data3_summary4, aes(x = Month, y = TotalOrders, color = as.factor(OrderYear), group = interaction(Area, OrderYear))) +
+  geom_line() +
+  facet_wrap(~ Area + Type) +
+  labs(x = "Month", y = "Total Orders", color = "Year", title = "Total Orders by Month and Year for Each Area and Product Type") +
+  theme_minimal() +
+  scale_x_discrete(labels = month.abb)
+
+#Filter for only Arms and Armour data as it looks its the only one with seasonality
+filtered_data <- merged_data3_summary4[merged_data3_summary4$Type == "ARMS & ARMOUR", ]
+
+# Plot the faceted plot
+ggplot(filtered_data, aes(x = Month, y = TotalOrders, color = as.factor(OrderYear), group = interaction(Area, OrderYear))) +
+  geom_line() +
+  facet_wrap(~ Area) +
+  labs(x = "Month", y = "Total Orders", color = "Year", title = "Total Orders for Arms and Armour by Month and Year for Each Area") +
+  theme_minimal() +
+  scale_x_discrete(labels = month.abb) 
+
+#Product perfomance 
+merged_data3_summary5 <- merged_data3_reduced  %>%
+  group_by(OrderYear, Area, Type) %>%
+  summarise(
+    TotalOrders = n(),
+    TotalQuantities = sum(Quantities),
+    TotalSales = sum(ProductPricesInCP)
+  ) %>%
+  ungroup()
+View(merged_data3_summary5)
+
+#Bar plot
+ggplot(merged_data3_summary5, aes(x = Area, y = TotalQuantities, fill = as.factor(OrderYear))) +
+  geom_bar(stat = "identity") +
+  labs(x = "Region", y = "TotalQuantities", title = "Total Product Quanties by Region and Year") +
+  scale_fill_discrete(name = "Year") +
+  theme_minimal() +
+  scale_y_continuous(labels = scales::number_format())
+
+#Facet plot
+ggplot(merged_data3_summary5, aes(x = TotalQuantities, y = Type, fill = as.factor(OrderYear))) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~ Area) +
+  labs(x = "Total Quantities", y = "Product Types", title = "Quantities of Product types by Region and Order year") +
+  scale_fill_discrete(name = "Year") +
+  theme_minimal() + 
+  scale_x_continuous(labels = scales::comma_format())
+
+#Tree map: Quantities of products by year
+aggregated_datatree <- merged_data3_summary %>%
+  group_by(Subtype, Type, OrderYear) %>%
+  summarise(TotalQuantities = sum(TotalQuantities),
+            TotalOrders = sum(TotalOrders),
+            TotalSales = sum(TotalSales)) %>%
+  ungroup()
+
+# Filter aggregated data for the year 2019
+aggregated_datatree_2019 <- aggregated_datatree[aggregated_datatree$OrderYear == 2019, ]
+View(aggregated_datatree_2019)
+
+# Create the treemap
+treemap(
+  aggregated_datatree_2019,
+  index = "Type",                # Index by product type
+  vSize = "TotalQuantities",     # Use TotalQuantities for the size of the blocks
+  title = "Total number of Products sold in 2019 by product type",
+  fontsize.labels = c(12, 10),
+  fontsize.title = 14
+)
+
+# Filter aggregated data for the year 2023
+aggregated_datatree_2023 <- aggregated_datatree[aggregated_datatree$OrderYear == 2023, ]
+View(aggregated_datatree_2023)
+
+# Create the treemap
+treemap(
+  aggregated_datatree_2023,
+  index = "Type",                # Index by product type
+  vSize = "TotalQuantities",     # Use TotalQuantities for the size of the blocks
+  title = "Total number of Products sold in 2023 by product type",
+  fontsize.labels = c(12, 10),
+  fontsize.title = 14
+)
+
+# Filter data for a specific area (e.g., North)
+#Tree map: Quantities of products by year
+aggregated_datatreeArea <- merged_data3_summary %>%
+  group_by(Subtype, Type, OrderYear, Area) %>%
+  summarise(TotalQuantities = sum(TotalQuantities),
+            TotalOrders = sum(TotalOrders),
+            TotalSales = sum(TotalSales)) %>%
+  ungroup()
+
+# Filter aggregated data for the year 2019 North
+aggregated_datatreeArea2019 <- aggregated_datatreeArea[aggregated_datatree$OrderYear == 2019, ]
+
+North_area_data <- aggregated_datatreeArea2019 %>%
+  filter(Area == "North")
+
+# Create the treemap for the specific area
+treemap(
+  North_area_data,
+  index = c("Area", "Type"),                # Index by both Area and product type
+  vSize = "TotalQuantities",                # Use TotalQuantities for the size of the blocks
+  title = "Total number of Products sold in 2019 for North by product type",
+  fontsize.labels = c(12, 10),
+  fontsize.title = 14
+)
+
+
+# Didnt work:Create the treemap with facetting by Area
+aggregated_datatree1 <- merged_data3_summary %>%
+  group_by(Type, OrderYear, Area) %>%
+  summarise(TotalQuantities = sum(TotalQuantities),
+            TotalOrders = sum(TotalOrders),
+            TotalSales = sum(TotalSales)) %>%
+  ungroup()
+
+# Filter aggregated data for the year 2019
+aggregated_datatree1_2019 <- aggregated_datatree1[aggregated_datatree1$OrderYear == 2019, ]
+aggregated_datatree1_2019$Area <- factor(aggregated_datatree1_2019$Area)
+View(aggregated_datatree1_2019)
+
+treemap(
+  aggregated_datatree1_2019,
+  index = c("Area", "Type"),                # Index by both Area and product type
+  vSize = "TotalQuantities",                # Use TotalQuantities for the size of the blocks
+  title = "Total number of Products sold in 2019 by product type and Area",
+  fontsize.labels = c(12, 10),
+  fontsize.title = 14,
+  group = "Area"                            # Facet by Area
+)
+
+
+
+#Sales data
+merged_data3_summary1 <- merged_data3_reduced  %>%
+  group_by(OrderYear, Area, Type) %>%
+  summarise(
+    TotalOrders = n(),
+    TotalQuantities = sum(Quantities),
+    TotalSales = sum(ProductPricesInCP)
+  ) %>%
+  ungroup()
+
+
+# Aggregate TotalQuantities by Type for each year
+agg_data2 <- merged_data3_summary %>%
+  group_by(OrderYear, Type) %>%
+  summarise(TotalQuantities = sum(TotalQuantities)) %>%
+  ungroup() %>%
+  arrange(OrderYear, desc(TotalQuantities))  # Sort Types based on TotalQuantities for each year
+
+# Create histogram
+ggplot(agg_data2, aes(x = reorder(Type, TotalQuantities), y = TotalQuantities, fill = factor(OrderYear))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "Type", y = "Total Quantities", 
+       title = "Total Quantities by Type for Each Year") +
+  scale_fill_discrete(name = "Year") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  # Rotate x-axis labels for better readability
+  scale_y_continuous(labels = comma_format())
+
+
+# Aggregate TotalOrders by Type for each year
+agg_data2 <- merged_data3_summary %>%
+  group_by(OrderYear, Type) %>%
+  summarise(TotalOrders = sum(TotalOrders)) %>%
+  ungroup() %>%
+  arrange(OrderYear, desc(TotalOrders))  # Sort Types based on TotalOrders for each year
+
+# Create histogram
+ggplot(agg_data2, aes(x = reorder(Type, TotalOrders), y = TotalOrders, fill = factor(OrderYear))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "Type", y = "Total Orders", 
+       title = "Total Orders by Type for Each Year") +
+  scale_fill_discrete(name = "Year") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  # Rotate x-axis labels for better readability
+  scale_y_continuous(labels = comma_format())  # Format y-axis labels with comma separator
+
+# Aggregate TotalSales by Type for each year
+agg_data_sales <- merged_data3_summary %>%
+  group_by(OrderYear, Type) %>%
+  summarise(TotalSales = sum(TotalSales)) %>%
+  ungroup() %>%
+  arrange(OrderYear, desc(TotalSales))  # Sort Types based on TotalSales for each year
+
+# Create histogram
+ggplot(agg_data_sales, aes(x = reorder(Type, TotalSales), y = TotalSales, fill = factor(OrderYear))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "Product Type", y = "Total Sales", 
+       title = "Total Sales by Product Type for Each Year") +
+  scale_fill_discrete(name = "Year") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  # Rotate x-axis labels for better readability
+  scale_y_continuous(labels = scales::dollar_format(prefix = "$"))
+
+
+# Aggregate TotalSales by Type and Area for each year
+agg_data_sales_area <- merged_data3_summary %>%
+  group_by(OrderYear, Area, Type) %>%
+  summarise(TotalSales = sum(TotalSales)) %>%
+  ungroup() %>%
+  arrange(OrderYear, desc(TotalSales))  # Sort Types based on TotalSales for each year
+
+# Create histogram with facets for each Area
+ggplot(agg_data_sales_area, aes(x = reorder(Type, TotalSales), y = TotalSales, fill = factor(OrderYear))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "Product Type", y = "Total Sales", 
+       title = "Total Sales by Product Type for Each Year and Area") +
+  scale_fill_discrete(name = "Year") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  # Rotate x-axis labels for better readability
+  scale_y_continuous(labels = scales::dollar_format(prefix = "$")) +  # Format y-axis labels as dollar amounts
+  facet_wrap(~ Area, scales = "free_y", nrow = 1)  # Facet by Area with free y-axis scales
+
+# Filter the data for the year 2019
+sales_data_2019 <- merged_data3_summary %>% 
+  filter(OrderYear == 2019)
+
+# Aggregate the filtered data
+aggregated_data_2019 <- sales_data_2019 %>%
+  group_by(OrderYear, Area, Type) %>%
+  summarise(TotalSales = sum(TotalSales),
+            TotalOrders = sum(TotalOrders),
+            TotalQuantities = sum(TotalQuantities)) %>%
+  ungroup()
+
+# Create the plot faceted by Area
+ggplot(aggregated_data_2019, aes(x = reorder(Type, TotalSales), y = TotalSales, fill = factor(OrderYear))) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(x = "Type", y = "Total Sales", 
+       title = "Total Sales by Type in 2019, Faceted by Area") +
+  scale_fill_discrete(name = "Year") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  
+  scale_y_continuous(labels = scales::dollar_format(prefix = "$")) +  
+  facet_wrap(~ Area, scales = "free_y", nrow = 1)
+```
+
+
+
+
+
+
+
+
+
+```{r}
+#Question 5
+
+ggplot(merged_data3_reduced, aes(x = Product, y = Quantities, fill = as.factor(OrderYear))) +
+  geom_bar(stat = "identity") +
+  facet_wrap(~ OrderYear, scales = "free") +
+  labs(x = "Product", y = "Quantity", title = "Histogram of Product and Quantity for Each Year") +
+  theme_minimal()
+```
+
+
+```{r}
+#Tree with branches: Didnt work
+
+aggregated_data2 <- merged_data3_summary %>%
+  group_by(Subtype, Type, OrderYear, Area) %>%
+  summarise(TotalQuantities = sum(TotalQuantities),
+            TotalOrders = sum(TotalOrders),
+            TotalSales = sum(TotalSales)) %>%
+  ungroup()
+
+# Filter aggregated data for the year 2019
+aggregated_data2_2019 <- aggregated_data2[aggregated_data2$OrderYear == 2019, ]
+
+# Define the trunk width
+trunk_width <- 0.5
+
+trunk_plot <- ggplot(data.frame(x = c(0, trunk_width), y = c(0, 1)), aes(x, y)) +
+  geom_rect(aes(xmin = 0, xmax = trunk_width, ymin = 0, ymax = 1), fill = "brown") +
+  coord_cartesian(clip = "off") +
+  theme_void() +
+  theme(legend.position = "none")
+
+# Add bulbs as leaves
+bulb_plot <- trunk_plot +
+  geom_point(data = aggregated_data2_2019, aes(x = as.numeric(Area) * trunk_width / 6, y = runif(nrow(aggregated_data2_2019), min = 0.2, max = 0.8), size = TotalQuantities, color = Type), shape = 16) +
+  scale_size_continuous(range = c(3, 10)) +
+  scale_color_manual(values = rainbow(length(unique(aggregated_data2_2019$Type)))) +
+  theme_void()
+
+# Display the plot
+bulb_plot
+
+
+
+
+```
+
